@@ -24,12 +24,13 @@ const PORT = process.env.PORT || 8000;
 const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/travel-leads";
 
 mongoose.connect(MONGO_URI)
-  .then(() => {
-    console.log("Connected to MongoDB");
-    app.listen(PORT, ()=>{
-        console.log(`The server is running on port ${PORT}`);
-    });
-  })
-  .catch((err) => {
-    console.error("Failed to connect to MongoDB", err);
+  .then(() => console.log("Connected to MongoDB"))
+  .catch((err) => console.error("Failed to connect to MongoDB", err));
+
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+      console.log(`The server is running on port ${PORT}`);
   });
+}
+
+export default app;

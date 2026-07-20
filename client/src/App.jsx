@@ -3,7 +3,7 @@ import axios from 'axios'
 import ChatWindow from './components/ChatWindow'
 import LivePanel from './components/LivePanel'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/chat';
+const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '/api/chat' : 'http://localhost:8000/api/chat');
 
 function App() {
   const [conversationId, setConversationId] = useState(localStorage.getItem('conversationId'))
