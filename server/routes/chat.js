@@ -66,10 +66,22 @@ router.post('/chat', async (req, res) => {
     
     conversation.messages.push({ role: 'assistant', content: llmResult.reply });
     
-    conversation.extractedData = {  
-      customer: { ...conversation.extractedData.customer, ...llmResult.extractedData.customer },
-      travel: { ...conversation.extractedData.travel, ...llmResult.extractedData.travel },
-      qualification: { ...conversation.extractedData.qualification, ...llmResult.extractedData.qualification }
+    const mergeData = (oldData, newData) => {
+      const merged = { ...oldData };
+      if (newData) {
+        for (const key in newData) {
+          if (newData[key] !== null && newData[key] !== undefined && newData[key] !== "") {
+            merged[key] = newData[key];
+          }
+        }
+      }
+      return merged;
+    };
+
+    conversation.extractedData = {
+      customer: mergeData(conversation.extractedData.customer, llmResult.extractedData?.customer),
+      travel: mergeData(conversation.extractedData.travel, llmResult.extractedData?.travel),
+      qualification: mergeData(conversation.extractedData.qualification, llmResult.extractedData?.qualification)
     };
 
     await conversation.save();
