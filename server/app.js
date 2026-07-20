@@ -20,6 +20,18 @@ app.get('/', (req, res)=>{
     });
 });
 
+app.get('/api', (req, res)=>{
+    return res.status(200).json({
+        message: "The API is up and healthy!"
+    });
+});
+
+app.get('/api/', (req, res)=>{
+    return res.status(200).json({
+        message: "The API is up and healthy!"
+    });
+});
+
 const PORT = process.env.PORT || 8000;
 const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/travel-leads";
 
