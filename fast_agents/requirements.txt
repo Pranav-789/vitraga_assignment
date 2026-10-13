@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+langchain>=0.2.0
+langgraph>=0.1.0
+langchain-google-genai
+qdrant-client
+pydantic
+python-dotenv
+requests

@@ -46,3 +46,10 @@ pids
 ehthumbs.db
 Thumbs.db
 .vercel
+
+# Python virtual environment and bytecode
+.venv/
+*/.venv/
+__pycache__/
+*/__pycache__/
+*.pyc

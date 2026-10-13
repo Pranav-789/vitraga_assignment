@@ -19,9 +19,25 @@ const mistralBaseLlm = new ChatMistralAI({
 });
 
 export async function checkTravelRelevance(userQuery, previousMessages = []) {
+  // Fast-path 1: If there is ongoing conversation history, user is answering dialog questions
+  if (previousMessages && previousMessages.length > 0) {
+    return true;
+  }
+
+  // Fast-path 2: Check common travel keywords for zero-latency, zero-quota verification
+  const lowerQuery = (userQuery || "").toLowerCase();
+  const travelKeywords = [
+    "trip", "travel", "visit", "vacation", "holiday", "itinerary", "tour", 
+    "shimla", "hotel", "flight", "destination", "explore", "pack", "fly", 
+    "ticket", "stay", "budget", "sightseeing", "route", "places", "go to"
+  ];
+  if (travelKeywords.some(kw => lowerQuery.includes(kw))) {
+    return true;
+  }
+
   try {
-    const recentContext = previousMessages.slice(-4).map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\\n');
-    const promptText = `RECENT CONVERSATION HISTORY:\\n${recentContext || "None"}\\n\\nUSER'S LATEST MESSAGE:\\n${userQuery}`;
+    const recentContext = previousMessages.slice(-4).map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n');
+    const promptText = `RECENT CONVERSATION HISTORY:\n${recentContext || "None"}\n\nUSER'S LATEST MESSAGE:\n${userQuery}`;
 
     const prompt = ChatPromptTemplate.fromMessages([
       ["system", "Analyze if the user's latest query is related to travel planning OR if it is a logical continuation of the ongoing travel conversation (e.g., providing contact info, answering the assistant's previous questions, general greetings)."],
@@ -41,7 +57,7 @@ export async function checkTravelRelevance(userQuery, previousMessages = []) {
     const response = await chain.invoke({ input: promptText });
     return response.isRelevant;
   } catch (error) {
-    console.error("LLM Error in checkTravelRelevance:", error);
+    console.error("LLM Error in checkTravelRelevance (defaulting to true):", error.message);
     return true; 
   }
 }
