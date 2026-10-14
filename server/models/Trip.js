@@ -120,7 +120,7 @@ const TripSchema = new mongoose.Schema({
 
     validationStatus: {
       type: String,
-      enum: ['valid', 'failed', 'regenerated'],
+      enum: ['valid', 'failed', 'regenerated', 'degraded'],
       default: 'valid'
     },
 

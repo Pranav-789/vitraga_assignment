@@ -152,7 +152,11 @@ class LogisticsValidatorAgent(WorkerAgent):
                 is_day_valid = False
                 logs.append(f"[Logistics Warning] Transit time {res_ae['transit_mins']} mins exceeds allowable slot threshold (120 min)")
 
-        day_plan.validation_status = "valid" if is_day_valid else "failed"
+        if is_day_valid:
+            if day_plan.validation_status != "regenerated":
+                day_plan.validation_status = "valid"
+        else:
+            day_plan.validation_status = "failed"
         return {"valid": is_day_valid, "logs": logs, "day_plan": day_plan}
 
     def execute_task(self, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -160,10 +164,13 @@ class LogisticsValidatorAgent(WorkerAgent):
         return self.validate_day_plan(day_plan)
 
 
+MAX_CRITIC_RETRIES = 3
+
 class CriticAgent(WorkerAgent):
     """
     Critic Agent evaluates the daily itinerary and triggers localized re-prompting
     for ONLY the failed day, saving compute and tokens.
+    Includes graceful degradation logic if localized re-prompts exceed 3 failed retries.
     """
     def __init__(self):
         super().__init__(agent_id="critic_agent")
@@ -174,7 +181,10 @@ class CriticAgent(WorkerAgent):
             day_plan.critique_notes = notes
             return {"approved": False, "reason": notes}
         
-        day_plan.critique_notes = "Approved: Pacing and transit logistics within optimal thresholds."
+        if day_plan.validation_status == "regenerated":
+            day_plan.critique_notes = "Approved (Regenerated via localized re-prompting): Pacing and transit logistics within optimal thresholds."
+        else:
+            day_plan.critique_notes = "Approved: Pacing and transit logistics within optimal thresholds."
         return {"approved": True, "reason": "Optimal travel schedule validated against Qdrant coordinates."}
 
     def trigger_localized_re_prompt(self, failed_day: DailyItinerary, destination: str, constraints: Dict[str, Any], planner: DayPlannerAgent, validator: LogisticsValidatorAgent) -> DailyItinerary:
@@ -198,6 +208,27 @@ class CriticAgent(WorkerAgent):
         validator.validate_day_plan(new_plan)
         return new_plan
 
+    def apply_graceful_degradation(self, day_plan: DailyItinerary, reason: str = "") -> DailyItinerary:
+        """
+        Graceful Degradation Logic:
+        Triggered when localized re-prompts exhaust the maximum retry limit (3 retries).
+        Relaxes physical transit constraints and marks day as degraded with a leisure schedule
+        to prevent downstream pipeline failure while preserving strict schema integrity.
+        """
+        print(f"[CriticAgent] Applying graceful degradation to Day {day_plan.day_number} after 3 failed retries...")
+        day_plan.validation_status = "degraded"
+        day_plan.critique_notes = (
+            f"Graceful degradation triggered after 3 failed retries. "
+            f"Reason: {reason or 'Transit constraints exceeded'}. Fallback relaxed itinerary applied."
+        )
+        if day_plan.afternoon_slot and (day_plan.afternoon_slot.travel_time_from_prev_mins or 0) > 120:
+            day_plan.afternoon_slot.travel_time_from_prev_mins = 60
+            day_plan.afternoon_slot.validation_status = "degraded"
+        if day_plan.evening_slot and (day_plan.evening_slot.travel_time_from_prev_mins or 0) > 120:
+            day_plan.evening_slot.travel_time_from_prev_mins = 60
+            day_plan.evening_slot.validation_status = "degraded"
+        return day_plan
+
     def execute_task(self, context: Dict[str, Any]) -> Dict[str, Any]:
         day_plan = context["day_plan"]
         val_res = context["validation_result"]
@@ -208,7 +239,7 @@ class TripSupervisor:
     """
     Supervisor Agent orchestrating the planning loop across Worker Agents.
     Executes LangGraph-style control flow:
-    Planner -> Validator -> Critic -> Localized Re-prompter (if failed) -> State Consolidation
+    Planner -> Validator -> Critic -> Localized Re-prompter (up to 3 retries) -> Graceful Degradation -> State Consolidation
     """
     def __init__(self):
         self.day_planner = DayPlannerAgent()
@@ -265,17 +296,40 @@ class TripSupervisor:
             # 3. Critic evaluates the plan
             critique = self.critic.evaluate_daily_itinerary(day_plan, val_res)
 
-            # 4. Localized Re-prompting if constraints fail
+            # 4. Localized Re-prompting loop with max 3 retries and graceful degradation
             if not critique["approved"]:
-                trip_state.validation_logs.append(f"[Critic] Day {day} failed physical validation: {critique['reason']}. Triggering localized re-prompt...")
-                day_plan = self.critic.trigger_localized_re_prompt(
-                    failed_day=day_plan,
-                    destination=destination,
-                    constraints=constraints,
-                    planner=self.day_planner,
-                    validator=self.logistics_validator
-                )
-                trip_state.validation_logs.append(f"[Critic] Day {day} successfully regenerated and verified.")
+                reprompt_success = False
+                for attempt in range(1, MAX_CRITIC_RETRIES + 1):
+                    trip_state.validation_logs.append(
+                        f"[Critic] Day {day} failed physical validation (Attempt {attempt}/{MAX_CRITIC_RETRIES}): {critique['reason']}. Triggering localized re-prompt..."
+                    )
+                    day_plan = self.critic.trigger_localized_re_prompt(
+                        failed_day=day_plan,
+                        destination=destination,
+                        constraints=constraints,
+                        planner=self.day_planner,
+                        validator=self.logistics_validator
+                    )
+                    # Re-validate regenerated day
+                    retry_val = self.logistics_validator.validate_day_plan(day_plan)
+                    trip_state.validation_logs.extend(retry_val["logs"])
+                    critique = self.critic.evaluate_daily_itinerary(day_plan, retry_val)
+
+                    if critique["approved"]:
+                        reprompt_success = True
+                        trip_state.validation_logs.append(
+                            f"[Critic] Day {day} successfully regenerated and verified on attempt {attempt}."
+                        )
+                        break
+
+                if not reprompt_success:
+                    trip_state.validation_logs.append(
+                        f"[Graceful Degradation] Day {day} failed after {MAX_CRITIC_RETRIES} localized re-prompt retries. Applying fallback degradation."
+                    )
+                    day_plan = self.critic.apply_graceful_degradation(day_plan, critique.get("reason", ""))
+                    trip_state.validation_logs.append(
+                        f"[Graceful Degradation] Day {day} preserved in degraded state with strict schema compliance."
+                    )
             else:
                 trip_state.validation_logs.append(f"[Critic] Day {day} passed quality and logistics audit.")
 

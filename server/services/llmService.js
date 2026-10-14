@@ -8,7 +8,7 @@ dotenv.config();
 
 const llm = new ChatGoogleGenerativeAI({
   apiKey: process.env.GEMINI_API_KEY,
-  model: "gemini-2.5-flash",
+  model: "gemini-3.5-flash",
   temperature: 0.1,
 });
 
@@ -74,7 +74,7 @@ export async function summarizeMessages(currentSummary, evictedTurns) {
 
     const summarizerLlm = new ChatGoogleGenerativeAI({
       apiKey: process.env.GEMINI_API_KEY,
-      model: "gemini-2.5-flash",
+      model: "gemini-3.5-flash",
       temperature: 0.3,
     });
     
@@ -167,7 +167,7 @@ Follow this strict conversational funnel:
 
     const intentLlm = new ChatGoogleGenerativeAI({
       apiKey: process.env.GEMINI_API_KEY,
-      model: "gemini-2.5-flash",
+      model: "gemini-3.5-flash",
       temperature: 0.7,
     });
     

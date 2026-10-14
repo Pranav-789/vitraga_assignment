@@ -203,9 +203,10 @@ function App() {
         setExtractedData(res.data.extractedData);
       }
 
-      if (res.data.offerConsent) {
-        setOfferConsent(true);
-      }
+      const shouldOffer = Boolean(
+        res.data.offerConsent && (res.data.isComplete || res.data.tripState?.dailyPlans?.length > 0)
+      );
+      setOfferConsent(shouldOffer);
     } catch (err) {
       console.error("Failed to send message via /api/chat/message:", err);
       if (err.response?.status === 401) {

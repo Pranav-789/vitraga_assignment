@@ -57,12 +57,18 @@ app.get('/api/health', (req, res) => {
     return res.status(200).json({ status: "healthy" });
 });
 
-const PORT = process.env.PORT || 8000;
+import http from "http";
+import websocketStreamer from "./services/websocketStreamer.js";
 
-if (process.env.NODE_ENV !== 'production') {
-  app.listen(PORT, () => {
+const PORT = process.env.PORT || 8000;
+const server = http.createServer(app);
+websocketStreamer.init(server);
+
+if (process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'test') {
+  server.listen(PORT, () => {
       console.log(`Node.js API Gateway is running on port ${PORT}`);
   });
 }
 
+export { app, server };
 export default app;

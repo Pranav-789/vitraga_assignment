@@ -13,9 +13,11 @@ try:
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if api_key:
         gemini_llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash",
             api_key=api_key,
-            temperature=0.1
+            temperature=0.1,
+            max_retries=0,
+            timeout=4
         )
 except Exception as e:
     print(f"[DialogManager] LLM initialization notice: {e}")
@@ -76,34 +78,37 @@ def rule_based_extract(message: str, history: List[Dict[str, Any]], current_stat
     # 3. Destination Extraction
     dest = updated.get("destination") or ""
     has_explicit_dest = re.search(
-        r'(?:trip to|visit|travel to|going to|explore|head to)\s+([A-Za-z\s]+?)(?:[.,!?]|$)', 
+        r'(?:want to go to|wants to go to|want to travel to|wants to travel to|want to visit|wants to visit|planning to visit|planning a trip to|planning to go to|plan a trip to|plan trip to|take me to|trip to|visit|visiting|travel to|traveling to|travelling to|going to|head to|heading to|explore|exploring|tour of|vacation to|vacation in|holiday in|go to)\s+([A-Za-z\s]+?)(?:[.,!?]|\bfor\b|\bfrom\b|\bwith\b|\bin\b|\bon\b|\bdeparting\b|\bleaving\b|$)', 
         message, 
         re.IGNORECASE
     )
     if has_explicit_dest:
         candidate = has_explicit_dest.group(1).strip()
-        if 2 < len(candidate) < 30:
-            dest = candidate.split()[0].capitalize()
+        candidate_words = [w for w in candidate.split() if w.lower() not in [
+            "the", "a", "an", "my", "our", "some", "few", "days", "day", "for", "from", "with", "tomorrow", "tonight", "departing", "leaving"
+        ]]
+        if candidate_words:
+            dest = " ".join([w.capitalize() for w in candidate_words[:2]])
     elif not dest:
         known_destinations = [
-            "shimla", "manali", "goa", "jaipur", "udaipur", "delhi", "mumbai", "agra", 
-            "kerala", "ladakh", "rishikesh", "tokyo", "kyoto", "paris", "rome", "bali", 
-            "london", "new york", "barcelona", "amritsar", "dharamshala", "nainital", "mussoorie"
+            "kedarnath", "badrinath", "shimla", "manali", "goa", "jaipur", "udaipur", "delhi", "mumbai", "agra", 
+            "kerala", "ladakh", "rishikesh", "haridwar", "varanasi", "tokyo", "kyoto", "paris", "rome", "bali", 
+            "london", "new york", "barcelona", "amritsar", "dharamshala", "nainital", "mussoorie", "kashmir", "leh", "sehore"
         ]
         for d in known_destinations:
             if d in msg_lower and d.capitalize() != dep_city:
                 dest = d.capitalize()
                 break
                 
-        if not dest and (
-            "where would you like to travel" in last_assistant_msg or 
-            "which destination" in last_assistant_msg or
-            "which place" in last_assistant_msg
-        ):
-            clean_text = re.sub(r'^(to|i want to go to|visiting|trip to)\s+', '', message, flags=re.IGNORECASE).strip()
+        if not dest:
+            clean_text = re.sub(r'^(to|i want to go to|i want to visit|visiting|trip to|travel to)\s+', '', message, flags=re.IGNORECASE).strip()
             words = clean_text.split()
-            if words:
-                dest = words[0].strip(".,!?").capitalize()
+            is_dest_question = any(q in last_assistant_msg for q in ["where would you like to travel", "which destination", "which place", "destination"])
+            is_turn_1 = len(history) == 0
+            if (is_dest_question or is_turn_1) and 1 <= len(words) <= 3:
+                first_word = words[0].lower().strip(".,!?")
+                if first_word not in ["hi", "hello", "hey", "help", "yes", "no", "start", "ok", "okay", "please", "plan"]:
+                    dest = " ".join([w.strip(".,!?").capitalize() for w in words[:2]])
     if dest:
         updated["destination"] = dest
 

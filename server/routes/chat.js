@@ -5,6 +5,7 @@ import { Conversation, Trip, User } from '../models/index.js';
 import { checkTravelRelevance } from '../services/llmService.js';
 import { observeLeadAsync } from '../services/leadObserver.js';
 import { authMiddleware } from '../middleware/authMiddleware.js';
+import websocketStreamer from '../services/websocketStreamer.js';
 
 const router = express.Router();
 
@@ -158,11 +159,17 @@ async function handleChatMessage(req, res) {
     // Append user message
     conversation.messages.push({ role: 'user', content: message });
 
+    // Broadcast WebSocket event: user message received
+    websocketStreamer.broadcast(sessionId, 'chat:received', { message });
+
     // Step 2: Bifurcation
     // 2a. Asynchronous LeadObserver updates Trip in background
     observeLeadAsync(sessionId, message, conversation.messages).catch(err => {
       console.error("[LeadObserver] Background error:", err.message);
     });
+
+    // Broadcast WebSocket event: background agent orchestration started
+    websocketStreamer.broadcast(sessionId, 'itinerary:generating', { status: 'processing' });
 
     // 2b. Proxy chat context to Python Compute Node for LangGraph orchestration
     let computeResult = null;
@@ -189,18 +196,37 @@ async function handleChatMessage(req, res) {
     }
 
     if (!computeResult) {
+      let fallbackReply = "I'm here to help plan your trip! Where would you like to travel?";
+      const currentDest = tripDoc.destination || "";
+      if (!currentDest) {
+        const destMatch = message.match(/(?:want to go to|wants to go to|want to travel to|wants to travel to|want to visit|wants to visit|planning to visit|planning a trip to|planning to go to|plan a trip to|plan trip to|take me to|trip to|visit|visiting|travel to|traveling to|travelling to|going to|head to|heading to|explore|exploring|tour of|vacation to|vacation in|holiday in|go to)\s+([A-Za-z\s]+?)(?:[.,!?]|\bfor\b|\bfrom\b|\bwith\b|\bin\b|\bon\b|$)/i);
+        if (destMatch && destMatch[1].trim()) {
+          const candidateDest = destMatch[1].trim().split(/\s+/)[0];
+          tripDoc.destination = candidateDest.charAt(0).toUpperCase() + candidateDest.slice(1).toLowerCase();
+          fallbackReply = `Great choice! **${tripDoc.destination}** is a fantastic place to visit. 🏔️ Where will you be departing from?`;
+        } else {
+          fallbackReply = "I would love to help you plan an unforgettable trip! 🌍 Where would you like to travel?";
+        }
+      } else if (!tripDoc.departureCity) {
+        fallbackReply = `Great choice! **${currentDest}** is a fantastic place to visit. 🏔️ Where will you be departing from?`;
+      } else if (!tripDoc.duration) {
+        fallbackReply = `Got it, departing from **${tripDoc.departureCity}**. How many days are you planning for your trip to ${currentDest}?`;
+      } else {
+        fallbackReply = `What date and departure time are you planning to start your journey to ${currentDest}?`;
+      }
+
       computeResult = {
-        reply: `I'm analyzing the best travel options for your trip. Let's explore exciting highlights and tailor your daily itinerary!\n\n✨ **Value-First Booking Support:**\nWould you like me to share this plan with our verified partner agencies for exclusive booking discounts?`,
+        reply: fallbackReply,
         trip_state: {
           tripId: tripDoc.tripId,
-          destination: tripDoc.destination || "Destination",
+          destination: tripDoc.destination || "",
           status: "planning",
           userConstraints: tripDoc.userConstraints || {},
-          validationLogs: ["[NodeGateway] Generating initial itinerary preview."],
+          validationLogs: ["[NodeGateway] Conversational turn handled gracefully."],
           dailyPlans: tripDoc.dailyPlans || [],
           is_complete: false
         },
-        offer_consent: true,
+        offer_consent: false,
         is_complete: false
       };
     }
@@ -258,6 +284,23 @@ async function handleChatMessage(req, res) {
       budgetEstimate: tripDoc.budgetEstimate || null,
       consentGiven: tripDoc.consentGiven || false
     };
+
+    // Stream individual daily plans over WebSocket if present
+    if (computeResult.trip_state?.daily_plans?.length) {
+      for (const plan of computeResult.trip_state.daily_plans) {
+        websocketStreamer.broadcast(sessionId, 'itinerary:day_stream', {
+          dayNumber: plan.dayNumber || plan.day_number,
+          plan
+        });
+      }
+    }
+
+    // Broadcast WebSocket completion event
+    websocketStreamer.broadcast(sessionId, 'itinerary:complete', {
+      tripState: tripDoc,
+      isComplete: Boolean(computeResult.is_complete),
+      offerConsent: Boolean(computeResult.offer_consent)
+    });
 
     return res.status(200).json({
       reply: computeResult.reply,

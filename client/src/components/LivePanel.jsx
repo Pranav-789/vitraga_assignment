@@ -1,3 +1,4 @@
+import React, { useState } from 'react';
 import { 
   User, Phone, Mail, MapPin, Wallet, Calendar, Users, Plane, 
   FileText, CheckCircle2, AlertTriangle, Info, Bot, Clock, 

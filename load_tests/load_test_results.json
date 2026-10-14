@@ -1,0 +1,127 @@
+{
+  "test_scenario": "500 Concurrent Users Booking Surge",
+  "ramp_up_profile": "50 users/sec to 500 peak, 5-minute sustain",
+  "sla_performance_baseline": {
+    "gateway_ack_sla_ms": 250.0,
+    "max_error_rate_percent": 1.0
+  },
+  "test_execution_summary": {
+    "status": "FAILED (SLA Violation on Compute Error Rate & Gateway P95)",
+    "total_requests": 3664,
+    "total_failures": 1581,
+    "overall_error_rate_percent": 43.15,
+    "gateway_error_rate_percent": 0.0,
+    "fastapi_error_rate_percent": 97.71
+  },
+  "gateway_endpoints": {
+    "POST /api/chat/init": {
+      "requests": 747,
+      "failures": 0,
+      "error_rate_percent": 0.0,
+      "avg_ms": 8359.0,
+      "min_ms": 4548.0,
+      "p50_ms": 5800.0,
+      "p90_ms": 12541.0,
+      "p95_ms": 16900.0,
+      "p99_ms": 32147.0
+    },
+    "POST /api/chat/message [Gateway]": {
+      "requests": 549,
+      "failures": 0,
+      "error_rate_percent": 0.0,
+      "avg_ms": 9590.0,
+      "min_ms": 6918.0,
+      "p50_ms": 9900.0,
+      "p90_ms": 14200.0,
+      "p95_ms": 18500.0,
+      "p99_ms": 26150.0
+    },
+    "POST /api/leads/consent": {
+      "requests": 500,
+      "failures": 0,
+      "error_rate_percent": 0.0,
+      "avg_ms": 12246.0,
+      "min_ms": 10003.0,
+      "p50_ms": 12000.0,
+      "p90_ms": 13900.0,
+      "p95_ms": 15200.0,
+      "p99_ms": 16999.0
+    },
+    "POST /api/auth/register": {
+      "requests": 250,
+      "failures": 0,
+      "error_rate_percent": 0.0,
+      "avg_ms": 22637.0,
+      "min_ms": 2507.0,
+      "p50_ms": 28000.0,
+      "p90_ms": 31000.0,
+      "p95_ms": 31800.0,
+      "p99_ms": 32171.0
+    }
+  },
+  "fastapi_endpoints": {
+    "POST /internal/generate-itinerary [FastAPI Compute]": {
+      "requests": 1618,
+      "failures": 1581,
+      "error_rate_percent": 97.71,
+      "avg_ms": 2791.0,
+      "min_ms": 1791.0,
+      "p50_ms": 2000.0,
+      "p90_ms": 2809.0,
+      "p95_ms": 3450.0,
+      "p99_ms": 92142.0
+    }
+  },
+  "bottlenecks_identified": [
+    {
+      "id": "BOTTLENECK-01",
+      "component": "FastAPI Compute Node (vector_db.py)",
+      "severity": "CRITICAL",
+      "issue": "Synchronous blocking HTTP I/O inside asyncio event loop",
+      "root_cause": "DynamicLocationStore._fetch_from_external_api uses synchronous requests.get() to OpenStreetMap Nominatim. Under concurrent load, requests blocks the entire single-threaded Python event loop.",
+      "impact": "Event loop starvation, timeouts up to 92 seconds, and 97.7% failure rate."
+    },
+    {
+      "id": "BOTTLENECK-02",
+      "component": "FastAPI Compute Node / External Dependency",
+      "severity": "CRITICAL",
+      "issue": "Public Nominatim API rate limiting (HTTP 429 / socket drops)",
+      "root_cause": "Nominatim enforces a hard rate limit of 1 request/second. 500 concurrent agents querying un-cached locations causes immediate rate limiting and connection refusal.",
+      "impact": "Cascade failure of DayPlannerAgent location lookups."
+    },
+    {
+      "id": "BOTTLENECK-03",
+      "component": "Node.js API Gateway (LeadObserver & Mongoose)",
+      "severity": "HIGH",
+      "issue": "Synchronous CPU spike during Bcrypt hashing and remote MongoDB Atlas roundtrips",
+      "root_cause": "bcrypt.hash() with default cost factor 10 blocks the Node.js libuv thread pool. In addition, un-pooled individual Atlas cloud DB roundtrips add ~150-300ms network RTT per user transaction.",
+      "impact": "Gateway acknowledgment p90 latency degraded to 14,200ms during the surge."
+    },
+    {
+      "id": "BOTTLENECK-04",
+      "component": "Dual-Stack Inter-Service Communication",
+      "severity": "MEDIUM",
+      "issue": "Synchronous HTTP proxy coupling between Express and FastAPI",
+      "root_cause": "Node.js route /api/chat/message holds an open HTTP connection to FastAPI for up to 30 seconds (AbortSignal.timeout(30000)) instead of utilizing an asynchronous message queue (e.g., Redis Streams / BullMQ) with WebSocket push.",
+      "impact": "High socket accumulation, connection exhaustion, and increased memory footprint on the gateway."
+    }
+  ],
+  "recommendations": [
+    {
+      "category": "FastAPI Async Architecture",
+      "action": "Replace synchronous 'requests' with 'httpx.AsyncClient' and offload CPU/blocking tasks to asyncio.to_thread or Celery/RQ workers."
+    },
+    {
+      "category": "Vector DB Pre-warming & Local Caching",
+      "action": "Pre-seed Qdrant collections with top 50 global tourist destinations and implement a local Redis L1 cache before external Nominatim fallback."
+    },
+    {
+      "category": "Decoupled Queue & WebSocket Streaming",
+      "action": "Bifurcate chat messaging via Redis Streams or RabbitMQ. Acknowledge HTTP 200 to client within 20ms with sessionId, then stream itinerary tokens and state updates asynchronously over WebSocket."
+    },
+    {
+      "category": "Database Optimization & Connection Pooling",
+      "action": "Enable Mongoose maxPoolSize: 100, use lean() queries for LeadProfile reads, and deploy Redis caching for session authentication tokens."
+    }
+  ]
+}

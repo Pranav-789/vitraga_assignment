@@ -100,7 +100,7 @@ The service utilizes **LangChain** with `.withFallbacks()`. If Gemini hits a rat
 
 ```mermaid
 graph TD
-    A[Incoming Request] --> B{LangChain: Gemini 2.5 Flash}
+    A[Incoming Request] --> B{LangChain: Gemini 3.5 Flash}
     B -- Success --> C[Structured Zod Output]
     B -- Error / Parse Fail --> D{LangChain Fallback: Mistral Small}
     D -- Success --> C
